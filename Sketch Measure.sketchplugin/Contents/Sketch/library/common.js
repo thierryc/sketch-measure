@@ -19,9 +19,11 @@ function _(str, data){
 
 var SM = {
         init: function(context, command){
+            Sketch = new API();
+            ga = new Analytics(context);
+
             this.prefs = NSUserDefaults.standardUserDefaults();
             this.context = context;
-
             this.version = this.context.plugin.version() + "";
             this.language = lang;
             this.SMVersion = this.prefs.stringForKey("SMVersion") + "" || 0;
@@ -44,8 +46,7 @@ var SM = {
             coscript.setShouldKeepAround(true);
 
             if(command && command == "init"){
-                this.manifest();
-                this.checkUpdate();
+                this.checkVersion();
                 return false;
             }
 
@@ -138,67 +139,31 @@ var SM = {
     TextAligns = ["left", "right", "center", "justify", "left"],
     ResizingType = ["stretch", "corner", "resize", "float"];
 SM.extend({
-    checkUpdate: function(){
-        var self = this,
-            webView = WebView.new(),
-            windowObject = webView.windowScriptObject(),
-            timestamp = new Date().getTime(),
-            delegate = new MochaJSDelegate({
-                "webView:didFinishLoadForFrame:": (function(webView, webFrame){
-                    var packageJSON = JSON.parse(self.toJSString(windowObject.evaluateWebScript("document.body.innerText"))),
-                        currentVersion = self.toJSString( self.context.plugin.version() ),
-                        lastestVersion = self.toJSString( packageJSON.version ),
-                        updated = self.prefs.integerForKey("SMUpdated") || 0;
+    checkVersion: function(){
+        var self = this;
 
-                    if( lastestVersion > currentVersion && timestamp > (updated + 1000 * 60 * 60 * 24) ){
-                        self.prefs.setInteger_forKey(timestamp, "SMUpdated");
-                        self.SMPanel({
-                            url: self.pluginSketch + "/panel/update.html",
-                            width: 480,
-                            height: 229,
-                            hiddenClose: true,
-                            data: {
-                                title: _("New Version!"),
-                                content: _("Just checked Sketch Measure has a new version (%@)", [packageJSON.version]),
-                                donate: _("Donate"),
-                                cancel: _("Cancel"),
-                                download: _("Download")
-                            },
-                            callback: function( data ){
-                                NSWorkspace.sharedWorkspace().openURL(NSURL.URLWithString("http://utom.design/measure/?ref=update"));
-                            }
-                        });
-                    }
-                })
-            });
-        webView.setFrameLoadDelegate_(delegate.getClassInstance());
-        webView.setMainFrameURL_("http://utom.design/measure/package.json?" + timestamp);
+        if( this.SMVersion && this.SMVersion < this.version ){
+
+          this.prefs.setObject_forKey(this.version, "SMVersion");
+          this.SMPanel({
+              url: this.pluginSketch + "/panel/update.html",
+              width: 480,
+              height: 229,
+              hiddenClose: true,
+              data: {
+                  title: _("New Version!"),
+                  content: _("You need to restart the Sketch.app"),
+                  donate: _("Donate"),
+                  download: _("Restart the Sketch.app")
+              },
+              callback: function( data ){
+                var manifestCore = new manifestMaster(self.context);
+                manifestCore.restartSketch();
+              }
+          });
+        }
     }
 });
-
-SM.extend({
-    manifest: function(){
-      var self = this,
-          manifestURL = self.pluginSketch + "/i18n/manifest-" + lang + ".json";
-
-      if( ( !self.SMVersion || self.SMVersion != this.version ) || ( !self.SMLanguage || self.SMLanguage != self.language ) ){
-        log("manifest")
-        self.prefs.setObject_forKey (self.version, "SMVersion");
-        self.prefs.setObject_forKey (self.language, "SMLanguage");
-        if(NSFileManager.defaultManager().fileExistsAtPath(manifestURL)){
-            manifest = NSString.stringWithContentsOfFile_encoding_error(manifestURL, 4, nil);
-            self.writeFile({
-                content: manifest,
-                path: self.pluginRoot + "/Contents/Sketch/",
-                fileName: "manifest.json"
-            });
-            AppController.sharedInstance().pluginManager().reloadPlugins();
-        }
-
-      }
-
-    }
-})
 
 SM.extend({
     prefix: "SMConfigs2",
@@ -286,20 +251,19 @@ SM.extend({
         // return str.replace(/\&/g, "&amp;").replace(/\"/g, "&quot;").replace(/\'/g, "&#39;").replace(/\</g, "&lt;").replace(/\>/g, '&gt;');
     },
     emojiToEntities: function(str) {
-      var emojiRanges = [
-            "\ud83c[\udf00-\udfff]", // U+1F300 to U+1F3FF
-            "\ud83d[\udc00-\ude4f]", // U+1F400 to U+1F64F
-            "\ud83d[\ude80-\udeff]"  // U+1F680 to U+1F6FF
-          ];
+      var self = this,
+          emojiRegExp = new RegExp("(?:[\u2700-\u27bf]|(?:\ud83c[\udde6-\uddff]){2}|[\ud800-\udbff][\udc00-\udfff]|[\u0023-\u0039]\ufe0f?\u20e3|\u3299|\u3297|\u303d|\u3030|\u24c2|\ud83c[\udd70-\udd71]|\ud83c[\udd7e-\udd7f]|\ud83c\udd8e|\ud83c[\udd91-\udd9a]|\ud83c[\udde6-\uddff]|[\ud83c[\ude01-\ude02]|\ud83c\ude1a|\ud83c\ude2f|[\ud83c[\ude32-\ude3a]|[\ud83c[\ude50-\ude51]|\u203c|\u2049|[\u25aa-\u25ab]|\u25b6|\u25c0|[\u25fb-\u25fe]|\u00a9|\u00ae|\u2122|\u2139|\ud83c\udc04|[\u2600-\u26FF]|\u2b05|\u2b06|\u2b07|\u2b1b|\u2b1c|\u2b50|\u2b55|\u231a|\u231b|\u2328|\u23cf|[\u23e9-\u23f3]|[\u23f8-\u23fa]|\ud83c\udccf|\u2934|\u2935|[\u2190-\u21ff])", "g");
         return str.replace(
-              new RegExp(emojiRanges.join("|"), "g"),
+              emojiRegExp,
               function(match) {
-                  var c = encodeURIComponent(match).split("%"),
-                      h = ((parseInt(c[1], 16) & 0x0F))
-                        + ((parseInt(c[2], 16) & 0x1F) << 12)
-                        + ((parseInt(c[3], 16) & 0x3F) << 6)
-                        + (parseInt(c[4], 16) & 0x3F);
-                  return "&#" + h.toString() + ";";
+                  var u = "";
+                  for (var i = 0; i < match.length; i++) {
+                      if( !(i%2) ){
+                        u += "&#" + match.codePointAt(i)
+                      }
+                  }
+
+                  return u;
               });
     },
     toSlug: function(str){
@@ -493,7 +457,7 @@ SM.extend({
     },
     updateContext: function(){
         this.context.document = NSDocumentController.sharedDocumentController().currentDocument();
-        this.context.selection = this.context.document.selectedLayers();
+        this.context.selection = this.context.document.selectedLayers().layers();
 
         return this.context;
     }
@@ -707,7 +671,7 @@ SM.extend({
                 alignment = alignment || 0, //[left, right, center, justify]
                 text = this.addText(this.page);
 
-            text.setTextColor(color);
+            text.changeTextColorTo(color.NSColorWithColorSpace(nil));
 
             text.setFontSize(12);
             text.setFontPostscriptName("HelveticaNeue");
@@ -1552,7 +1516,7 @@ SM.extend({
         var targetRect = this.getRect(target),
             name = "OVERLAY#" + target.objectID(),
             container = this.find({key: "(name != NULL) && (name == %@)", match: name}),
-            overlayStyle = this.sharedLayerStyle("@Overlay / Layer", this.colors.overlay.layer);
+            overlayStyle = this.sharedLayerStyle("Sketch Measure / Overlay", this.colors.overlay.layer);
 
         if (container) this.removeLayer(container);
         container = this.addGroup();
@@ -1616,8 +1580,8 @@ SM.extend({
             properties = options.properties,
             placement = options.placement,
             styles = {
-                layer: this.sharedLayerStyle("@Property / Layer", this.colors.property.layer),
-                text: this.sharedTextStyle("@Property / Text", this.colors.property.text)
+                layer: this.sharedLayerStyle("Sketch Measure / Property", this.colors.property.layer),
+                text: this.sharedTextStyle("Sketch Measure / Property", this.colors.property.text)
             },
             target = options.target,
             targetStyle = target.style(),
@@ -1656,12 +1620,11 @@ SM.extend({
                     }
                     break;
                 case "shadow":
-                    if(targetStyle.shadow() || (targetStyle.shadow() && targetStyle.shadow().isEnabled()) ){
-                        content.push("shadow: outer\r\n" + self.shadowContent(targetStyle.shadow()));
+                    if( targetStyle.firstEnabledShadow() ){
+                        content.push("shadow: outer\r\n" + self.shadowContent(targetStyle.firstEnabledShadow()));
                     }
-
-                    if(targetStyle.innerShadow() || (targetStyle.innerShadow() && targetStyle.innerShadow().isEnabled()) ){
-                        content.push("shadow: inner\r\n" + self.shadowContent(targetStyle.innerShadow()));
+                    if( targetStyle.enabledInnerShadows().firstObject() ){
+                        content.push("shadow: inner\r\n" + self.shadowContent(targetStyle.enabledInnerShadows().firstObject()));
                     }
                     break;
                 case "font-size":
@@ -1750,8 +1713,8 @@ SM.extend({
 
         if(this.sizesPanel()){
             var sizeStyles = {
-                    layer: this.sharedLayerStyle("@Size / Layer", this.colors.size.layer),
-                    text: this.sharedTextStyle("@Size / Text", this.colors.size.text, 2)
+                    layer: this.sharedLayerStyle("Sketch Measure / Size", this.colors.size.layer),
+                    text: this.sharedTextStyle("Sketch Measure / Size", this.colors.size.text, 2)
                 };
 
             for (var i = 0; i < selection.count(); i++) {
@@ -1796,8 +1759,8 @@ SM.extend({
                 layer = (selection.count() == 1)? this.current: selection[0],
                 placements = ["top", "right", "bottom", "left"],
                 spacingStyles = {
-                        layer: this.sharedLayerStyle("@Spacing / Layer", this.colors.spacing.layer),
-                        text: this.sharedTextStyle("@Spacing / Text", this.colors.spacing.text, 2)
+                        layer: this.sharedLayerStyle("Sketch Measure / Spacing", this.colors.spacing.layer),
+                        text: this.sharedTextStyle("Sketch Measure / Spacing", this.colors.spacing.text, 2)
                     };
 
             if( this.isIntersect(this.getRect(target), this.getRect(layer)) ){
@@ -1847,8 +1810,8 @@ SM.extend({
         }
 
         var sizeStyles = {
-                layer: this.sharedLayerStyle("@Size / Layer", this.colors.size.layer),
-                text: this.sharedTextStyle("@Size / Text", this.colors.size.text, 2)
+                layer: this.sharedLayerStyle("Sketch Measure / Size", this.colors.size.layer),
+                text: this.sharedTextStyle("Sketch Measure / Size", this.colors.size.text, 2)
             };
 
             for (var i = 0; i < selection.count(); i++) {
@@ -1897,8 +1860,8 @@ SM.extend({
         var target = (selection.count() == 1)? selection[0]: selection[1],
             layer = (selection.count() == 1)? this.current: selection[0],
             spacingStyles = {
-                    layer: this.sharedLayerStyle("@Spacing / Layer", this.colors.spacing.layer),
-                    text: this.sharedTextStyle("@Spacing / Text", this.colors.spacing.text, 2)
+                    layer: this.sharedLayerStyle("Sketch Measure / Spacing", this.colors.spacing.layer),
+                    text: this.sharedTextStyle("Sketch Measure / Spacing", this.colors.spacing.text, 2)
                 },
             placements = ["top", "right", "bottom", "left"];
 
@@ -1973,8 +1936,8 @@ SM.extend({
         var targetRect = this.getRect(target),
             objectID = target.objectID(),
             noteStyle = {
-                layer: this.sharedLayerStyle("@Note / Layer", this.colors.note.layer, this.colors.note.border),
-                text: this.sharedTextStyle("@Note / Text", this.colors.note.text)
+                layer: this.sharedLayerStyle("Sketch Measure / Note", this.colors.note.layer, this.colors.note.border),
+                text: this.sharedTextStyle("Sketch Measure / Note", this.colors.note.text)
             },
             container = this.addGroup();
 
@@ -2227,7 +2190,7 @@ SM.extend({
         openPanel.setDirectoryURL(NSURL.fileURLWithPath("~/Documents/"));
         openPanel.setTitle(_("Choose a &quot;colors.json&quot;"));
         openPanel.setPrompt(_("Choose"));
-        openPanel.setAllowedFileTypes(NSArray.arrayWithObjects("json"))
+        openPanel.setAllowedFileTypes(["json"])
 
         if (openPanel.runModal() != NSOKButton) {
             return false;
@@ -2327,31 +2290,18 @@ SM.extend({
             var layer = this.selection[i],
                 slice = layer;
 
-            if(optionKey && !this.is(layer, MSSliceLayer)){
+            if(!optionKey && !this.is(layer, MSSliceLayer)){
                 slice = MSSliceLayer.sliceLayerFromLayer(layer);
 
-                var layerRect = this.getRect(layer),
-                    sliceRect = this.getRect(slice);
+                var msRect = MSRect.rectWithUnionOfRects([
+                        MSRect.alloc().initWithRect(slice.absoluteRect().rect()),
+                        MSRect.alloc().initWithRect(layer.absoluteRect().rect())
+                    ]);
 
-                if(layerRect.width > sliceRect.width){
-                    sliceRect.setX(layerRect.x);
-                    sliceRect.setWidth(layerRect.width);
-                }
-
-                if(layerRect.height > sliceRect.height){
-                    sliceRect.setY(layerRect.y);
-                    sliceRect.setHeight(layerRect.height);
-                }
+                slice.absoluteRect().setRect(msRect.rect());
 
                 if(this.is(layer, MSLayerGroup)){
-                    var sliceCopy = slice.copy();
-                    layer.addLayers([sliceCopy]);
-
-                    var sliceCopyRect = this.getRect(sliceCopy);
-                    sliceCopyRect.setX(sliceRect.x);
-                    sliceCopyRect.setY(sliceRect.y);
-                    this.removeLayer(slice);
-                    slice = sliceCopy;
+                    slice.moveToLayer_beforeLayer(layer, layer.firstLayer());
                     slice.exportOptions().setLayerOptions(2);
                 }
             }
@@ -2362,7 +2312,7 @@ SM.extend({
                 size.setName("");
                 size.setScale(1);
 
-            if(!optionKey || this.is(layer, MSSliceLayer)){
+            if(optionKey || this.is(layer, MSSliceLayer)){
                 layer.setIsSelected(0);
                 layer.setIsSelected(1);
             }
@@ -2498,45 +2448,72 @@ SM.extend({
 
         }
     },
+    getFormats: function( exportFormats ) {
+      var formats = [];
+      for (var i = 0; i < exportFormats.length; i++) {
+        var format = exportFormats[i],
+            prefix = "",
+            suffix = "";
+
+        if(format.namingScheme){
+          if(format.namingScheme()){
+            prefix = format.name();
+          }
+          else{
+            suffix = format.name();
+          }
+        }
+        else{
+          suffix = format.name();
+        }
+
+        formats.push({
+          scale: format.scale(),
+          prefix: prefix,
+          suffix: suffix,
+          format: format.fileFormat()
+        })
+      }
+      return formats;
+    },
     getExportable: function(layer, savePath){
         var self = this,
             exportable = [],
             size, sizes = layer.exportOptions().exportFormats(),
             fileFormat = this.toJSString(sizes[0].fileFormat()),
             matchFormat = /png|jpg|tiff|webp/.exec(fileFormat);
-        var formats =
+        var exportFormats =
             (self.configs.unit == "dp/sp" && matchFormat)? [
-              { scale: 1 / self.configs.scale, drawable: "drawable-mdpi/" },
-              { scale: 1.5 / self.configs.scale, drawable: "drawable-hdpi/" },
-              { scale: 2 / self.configs.scale, drawable: "drawable-xhdpi/" },
-              { scale: 3 / self.configs.scale, drawable: "drawable-xxhdpi/" },
-              { scale: 4 / self.configs.scale, drawable: "drawable-xxxhdpi/"}
+              { scale: 1 / self.configs.scale, prefix: "drawable-mdpi/", format: fileFormat },
+              { scale: 1.5 / self.configs.scale, prefix: "drawable-hdpi/", format: fileFormat },
+              { scale: 2 / self.configs.scale, prefix: "drawable-xhdpi/", format: fileFormat },
+              { scale: 3 / self.configs.scale, prefix: "drawable-xxhdpi/", format: fileFormat },
+              { scale: 4 / self.configs.scale, prefix: "drawable-xxxhdpi/", format: fileFormat }
             ]:
             (this.configs.unit == "pt" && matchFormat)? [
-              { scale: 1 / self.configs.scale, suffix: "" },
-              { scale: 2 / self.configs.scale, suffix: "@2x" },
-              { scale: 3 / self.configs.scale, suffix: "@3x" }
+              { scale: 1 / self.configs.scale, suffix: "", format: fileFormat },
+              { scale: 2 / self.configs.scale, suffix: "@2x", format: fileFormat },
+              { scale: 3 / self.configs.scale, suffix: "@3x", format: fileFormat }
             ]:
-            [
-              { scale: 1, drawablePath: "", suffix: "" }
-            ];
+            self.getFormats(sizes);
 
-        for(format of formats) {
-          var drawable = format.drawable || "",
-              suffix = format.suffix || "";
+        for(exportFormat of exportFormats) {
+          var prefix = exportFormat.prefix || "",
+              suffix = exportFormat.suffix || "";
           self.exportImage({
                   layer: layer,
                   path: self.assetsPath,
-                  scale: format.scale,
-                  name: drawable + layer.name(),
+                  scale: exportFormat.scale,
+                  name: layer.name(),
+                  prefix: prefix,
                   suffix: suffix,
-                  format: fileFormat
+                  format: exportFormat.format
               });
 
           exportable.push({
                   name: self.toJSString(layer.name()),
                   format: fileFormat,
-                  path: drawable + layer.name() + suffix + ".png"
+                  path: prefix + layer.name() + suffix + "." + exportFormat.format
               });
         }
 
@@ -2750,6 +2727,7 @@ SM.extend({
         return savePanel.URL().path();
     },
     exportPanel: function(){
+        if(ga) ga.sendEvent('spec', 'export to spec viewer');
         var self = this;
         this.artboardsData = [];
         this.selectionArtboards = {};
@@ -2761,6 +2739,11 @@ SM.extend({
         data.exportOption = self.configs.exportOption;
         if(data.exportOption == undefined){
             data.exportOption = true;
+        }
+
+        data.exportInfluenceRect = self.configs.exportInfluenceRect;
+        if(data.exportInfluenceRect == undefined){
+            data.exportInfluenceRect = false;
         }
 
         self.configs.order = (self.configs.order)? self.configs.order: "positive";
@@ -2803,7 +2786,7 @@ SM.extend({
         return this.SMPanel({
             url: this.pluginSketch + "/panel/export.html",
             width: 320,
-            height: 567,
+            height: 597,
             data: data,
             callback: function( data ){
                 var allData = self.allData;
@@ -2841,6 +2824,7 @@ SM.extend({
 
                 self.configs = self.setConfigs({
                     exportOption: data.exportOption,
+                    exportInfluenceRect: data.exportInfluenceRect,
                     order: data.order
                 });
             }
@@ -2991,7 +2975,7 @@ SM.extend({
                                     });
                                 selectingPath = savePath + "/index.html";
                             }
-                            NSWorkspace.sharedWorkspace().activateFileViewerSelectingURLs(NSArray.arrayWithObjects(NSURL.fileURLWithPath(selectingPath)));
+                            NSWorkspace.sharedWorkspace().activateFileViewerSelectingURLs([NSURL.fileURLWithPath(selectingPath)]);
 
                             self.message(_("Export complete!"));
                             self.wantsStop = true;
@@ -3035,6 +3019,7 @@ SM.extend({
                 path: this.toJSString(NSTemporaryDirectory()),
                 scale: 1,
                 name: "preview",
+                prefix: "",
                 suffix: "",
                 format: "png"
             }),
@@ -3048,6 +3033,7 @@ SM.extend({
         savePathName.push(
                 options.path,
                 "/",
+                options.prefix,
                 options.name,
                 options.suffix,
                 ".",
@@ -3096,11 +3082,27 @@ SM.extend({
             layer.setTextBehaviour(0); // fixed for v40
         } // fixed for v40
 
+        var exportLayerRect;
+        if(this.configs.exportInfluenceRect == true && layerType != "text"){
+            // export the influence rect.(include the area of shadows and outside borders...)
+            var influenceCGRect = layer.absoluteInfluenceRect();
+            exportLayerRect = {
+                        x: function(){return influenceCGRect.origin.x;},
+                        y: function(){return influenceCGRect.origin.y;},
+                        width: function(){return influenceCGRect.size.width;},
+                        height: function(){return influenceCGRect.size.height;}
+            }
+        }
+        else{
+            // export the default rect.
+            exportLayerRect = layer.absoluteRect();
+        }
+
         var layerData = {
                     objectID: this.toJSString( layer.objectID() ),
                     type: layerType,
                     name: this.toHTMLEncode(this.emojiToEntities(layer.name())),
-                    rect: this.rectToJSON(layer.absoluteRect(), artboardRect)
+                    rect: this.rectToJSON(exportLayerRect, artboardRect)
                 };
 
         if(symbolLayer) layerData.objectID = this.toJSString( symbolLayer.objectID() );
